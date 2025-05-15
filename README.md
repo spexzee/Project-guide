@@ -1058,3 +1058,159 @@ export default GenericJetLinkDataTable;
 ```
 
 Note: For true server-side row model, you would typically implement a proper datasource that makes API calls, but this implementation bridges the gap between letting AG-Grid handle pagination UI while maintaining your existing Redux-based data flow.
+
+
+
+------------
+
+
+# Fixing Pagination Reset Issue in AG-Grid Server-Side Implementation
+
+The issue you're describing occurs because there's a circular dependency between the grid's pagination changes and your Redux state updates. Here's how to fix it:
+
+## Root Cause
+1. When you click "Next", AG-Grid requests page 1
+2. Your handler updates Redux state with page=1
+3. The useEffect sees the page change and tells AG-Grid to go to page 1
+4. This triggers another pagination change event, creating an infinite loop
+
+## Solution
+
+```typescript
+import React, { FC, useEffect, useRef, useState } from 'react';
+import { AgGridReact } from 'ag-grid-react';
+import { GridApi, GridReadyEvent, ColDef, IServerSideDatasource } from 'ag-grid-community';
+
+interface Props {
+  responseData: any[];
+  columns: ColDef[];
+  loading: boolean;
+  totalRecords: number;
+  page: number;
+  pageSize: number;
+  onPageChange: (newPage: number) => void;
+  onPageSizeChange: (newSize: number) => void;
+}
+
+const ServerSideGrid: FC<Props> = ({
+  responseData,
+  columns,
+  loading,
+  totalRecords,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}) => {
+  const gridRef = useRef<AgGridReact>(null);
+  const gridApiRef = useRef<GridApi | null>(null);
+  const [initialized, setInitialized] = useState(false);
+
+  // Create stable datasource reference
+  const datasource = React.useMemo<IServerSideDatasource>(() => ({
+    getRows: (params) => {
+      const requestedPage = Math.floor(params.request.startRow / pageSize);
+      
+      // Only notify parent if page actually changed
+      if (requestedPage !== page && initialized) {
+        onPageChange(requestedPage);
+      } else {
+        // Provide the data to grid
+        params.success({
+          rowData: responseData,
+          rowCount: totalRecords,
+        });
+      }
+    }
+  }), [pageSize, responseData, totalRecords, initialized]);
+
+  const onGridReady = (params: GridReadyEvent) => {
+    gridApiRef.current = params.api;
+    params.api.setGridOption('serverSideDatasource', datasource);
+    setInitialized(true);
+  };
+
+  // Only refresh data when response changes
+  useEffect(() => {
+    if (gridApiRef.current && initialized) {
+      gridApiRef.current.refreshServerSideStore();
+    }
+  }, [responseData, totalRecords]);
+
+  // Set initial page position
+  useEffect(() => {
+    if (gridApiRef.current && initialized) {
+      const startRow = page * pageSize;
+      gridApiRef.current.ensureIndexVisible(startRow, 'top');
+    }
+  }, [page, pageSize]);
+
+  return (
+    <div className="ag-theme-alpine" style={{ height: 600 }}>
+      <AgGridReact
+        ref={gridRef}
+        columnDefs={columns}
+        defaultColDef={{ sortable: true, filter: true }}
+        onGridReady={onGridReady}
+        rowModelType="serverSide"
+        pagination={true}
+        paginationPageSize={pageSize}
+        cacheBlockSize={pageSize}
+        serverSideInfiniteScroll={true}
+      />
+    </div>
+  );
+};
+```
+
+## Key Fixes
+
+1. **Initialization Flag**:
+   - Added `initialized` state to prevent early triggers
+   - Only start handling pagination after grid is ready
+
+2. **Stable Datasource**:
+   - Used `React.useMemo` to prevent unnecessary recreations
+   - The datasource now checks if page actually changed before notifying parent
+
+3. **Controlled Updates**:
+   - Separated data refresh from page position updates
+   - Only refresh data when response changes
+   - Only update scroll position when page changes
+
+4. **Proper Pagination Flow**:
+   ```
+   User clicks next → AG-Grid requests page → 
+   → Datasource checks if page changed → 
+   → If changed, notifies parent → 
+   → Parent fetches data → 
+   → New data flows to grid
+   ```
+
+## Implementation Notes
+
+1. **Usage Example**:
+```typescript
+<ServerSideGrid
+  responseData={data}
+  columns={columns}
+  loading={loading}
+  totalRecords={total}
+  page={currentPage}
+  pageSize={pageSize}
+  onPageChange={handlePageChange}
+  onPageSizeChange={handlePageSizeChange}
+/>
+```
+
+2. **Parent Component Should**:
+   - Manage the API calls in Redux
+   - Update `responseData`, `totalRecords`, `page`, and `pageSize` in state
+   - Not directly interact with the grid instance
+
+3. **Why This Works**:
+   - Breaks the infinite loop by checking actual page changes
+   - Maintains single source of truth for pagination state
+   - Still provides smooth user experience with AG-Grid's native pagination
+
+This solution should eliminate the double-calling issue while maintaining proper server-side pagination behavior.
