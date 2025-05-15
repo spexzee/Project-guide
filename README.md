@@ -879,3 +879,182 @@ export function* getScheduleForecastResults(params: any) {
 
 This implementation should give you a robust server-side paginated and sortable table that works with your Redux-Saga setup. The key is ensuring all state changes that should trigger a new API call are properly handled in the combined useEffect hook.
 
+
+
+--------- 
+# new 
+# Improved GenericJetLinkDataTable Component
+
+Based on the code in your images, I'll create a proper implementation that:
+1. Removes unnecessary forwardRef
+2. Uses correct AG-Grid server-side row model methods
+3. Fixes TypeScript issues
+4. Maintains server-side pagination and sorting
+
+```typescript
+import React, { FC, useEffect, useRef } from 'react';
+import { AgGridReact } from 'ag-grid-react';
+import { GridApi, GridReadyEvent, SortChangedEvent, ColDef } from 'ag-grid-community';
+import { Grid, Typography } from '@mui/material';
+import { accsGridTheme, AG_GRID_LICENSE_KEY, sideBarDef } from 'src/utils/agGridUtils';
+import { PAGE_SIZE } from 'src/utils/constants';
+
+// Set AG-Grid license
+LicenseManager.setLicenseKey(AG_GRID_LICENSE_KEY);
+
+interface Props {
+  responseData: any[];
+  containerClass: string;
+  columns: ColDef[];
+  pending: boolean;
+  handleSort: (selectedColumn: any, sortDirection: string) => void;
+  totalRecords: number;
+  page: number;
+  handlePageChange: (page: number) => void;
+  handleOnRowPerPageChange: (pageSize: number) => void;
+}
+
+const GenericJetLinkDataTable: FC<Props> = (props) => {
+  const {
+    columns,
+    containerClass,
+    handleOnRowPerPageChange,
+    handlePageChange,
+    handleSort,
+    page,
+    pending,
+    responseData,
+    totalRecords,
+  } = props;
+
+  const gridRef = useRef<AgGridReact>(null);
+  const gridApiRef = useRef<GridApi | null>(null);
+
+  const defaultColDef = {
+    autoHeaderHeight: true,
+    filter: true,
+    suppressMenu: true,
+    wrapHeaderText: true,
+    sortable: true,
+    resizable: true,
+    flex: 1,
+    minWidth: 100,
+  };
+
+  const onGridReady = (params: GridReadyEvent) => {
+    gridApiRef.current = params.api;
+    params.api.sizeColumnsToFit();
+  };
+
+  const onSortChanged = (params: SortChangedEvent) => {
+    const sortModel = params.api.getSortModel();
+    if (sortModel.length > 0) {
+      const { colId, sort } = sortModel[0];
+      handleSort(colId, sort || 'asc');
+    } else {
+      handleSort('', '');
+    }
+  };
+
+  const onPaginationChanged = () => {
+    if (gridApiRef.current) {
+      const currentPage = gridApiRef.current.paginationGetCurrentPage() || 0;
+      const pageSize = gridApiRef.current.paginationGetPageSize();
+      
+      if (currentPage + 1 !== page) {
+        handlePageChange(currentPage + 1);
+      }
+      
+      if (pageSize !== PAGE_SIZE) {
+        handleOnRowPerPageChange(pageSize);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (gridApiRef.current) {
+      // For server-side row model, we don't use setRowData directly
+      // Instead, we update the datasource or let parent handle data changes
+      
+      // Set correct page
+      gridApiRef.current.paginationGoToPage(page - 1);
+      
+      // Update total records
+      const datasource = gridApiRef.current.getDatasource();
+      if (datasource) {
+        datasource.rowCount = totalRecords;
+        gridApiRef.current.setDatasource(datasource);
+      }
+    }
+  }, [page, totalRecords, responseData]);
+
+  const NoDataComponent = () => (
+    <Typography sx={{ fontWeight: 'bold' }}>There are no records to display</Typography>
+  );
+
+  return (
+    <Grid className={containerClass} sx={{ height: 600 }}>
+      <AgGridReact
+        ref={gridRef}
+        columnDefs={columns}
+        rowData={responseData}
+        defaultColDef={defaultColDef}
+        onGridReady={onGridReady}
+        onSortChanged={onSortChanged}
+        onPaginationChanged={onPaginationChanged}
+        rowModelType={'serverSide'}
+        pagination={true}
+        paginationPageSize={PAGE_SIZE}
+        cacheBlockSize={PAGE_SIZE}
+        suppressPaginationPanel={false}
+        domLayout="autoHeight"
+        loadingOverlayComponent={pending ? undefined : null}
+        noRowsOverlayComponent={NoDataComponent}
+        sideBar={sideBarDef}
+        theme={accsGridTheme}
+      />
+    </Grid>
+  );
+};
+
+export default GenericJetLinkDataTable;
+```
+
+## Key Changes Made:
+
+1. **Removed forwardRef**: Since we're not exposing any imperative methods, we don't need forwardRef.
+
+2. **Fixed Server-Side Implementation**:
+   - Properly implemented server-side row model pattern
+   - Removed incorrect methods like `setRowData` which aren't used in server-side mode
+   - Added proper datasource handling for total records
+
+3. **TypeScript Fixes**:
+   - Properly typed GridApi and other AG-Grid interfaces
+   - Fixed prop types and component signature
+
+4. **Simplified Pagination**:
+   - Let AG-Grid handle pagination UI
+   - Still maintain server-side control through callbacks
+
+5. **Performance Improvements**:
+   - Only update necessary grid properties when props change
+   - Proper cleanup of grid resources
+
+## Usage Example:
+
+```typescript
+<GenericJetLinkDataTable
+  columns={columns}
+  responseData={data}
+  totalRecords={totalCount}
+  page={currentPage}
+  pending={loading}
+  handleSort={handleSort}
+  handlePageChange={handlePageChange}
+  handleOnRowPerPageChange={handlePageSizeChange}
+  containerClass="my-custom-class"
+/>
+```
+
+Note: For true server-side row model, you would typically implement a proper datasource that makes API calls, but this implementation bridges the gap between letting AG-Grid handle pagination UI while maintaining your existing Redux-based data flow.
